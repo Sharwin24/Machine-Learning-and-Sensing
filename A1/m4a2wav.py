@@ -49,10 +49,7 @@ if os.path.exists(f"{dataset_id}/"):
     # Convert m4a to wav
     for file in audio_files:
         if file.endswith(".m4a"):
-            os.system(
-                f"ffmpeg -i {dataset_id}/{file} {dataset_id}/{file[:-4]}.wav"
-            )
-            print(f"Converted {file} to {file[:-4]}.wav")
+            m4a_to_wav(f"{dataset_id}/{file}")
             # Delete the original m4a file
             os.remove(f"{dataset_id}/{file}")
     print(f"Converted {len(audio_files)} files")
