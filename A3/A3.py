@@ -12,6 +12,7 @@ import wget
 import os
 from reprint import output
 from helpers import Interpolator, ratio_to_db, dbFS, rangemap
+import matplotlib.pyplot as plt
 
 
 # thresholds
@@ -25,7 +26,7 @@ RATE = 16000
 CHUNK = RATE
 MICROPHONES_DESCRIPTION = []
 FPS = 60.0
-OUTPUT_LINES = 33
+OUTPUT_LINES = 34
 
 ###########################
 # Model download
@@ -136,16 +137,34 @@ interpolators = []
 for k in range(31):
     interpolators.append(Interpolator())
 
-# Audio Input Callback
+# Real-time Waveform setup
+plt.ion()
+fig, ax = plt.subplots()
+ax.set_title('Real-time Waveform')
+ax.set_xlabel('Time (s)')
+ax.set_ylabel('Amplitude')
+ax.set_xlim(0, CHUNK)
+ax.set_ylim(-1, 1)
+line, = ax.plot([0]*CHUNK, lw=2)  # initialize line
+
+# global variable for waveform and inference time
+waveform = np.zeros(CHUNK)
+inference_time = 0  # [ms]
 
 
 def audio_samples(in_data, frame_count, time_info, status_flags):
+  # Audio Input Callback
     global output_lines
     global interpolators
     global audio_rms
     global candidate
+    global waveform
+    global inference_time
+
+    # Update waveform data
     np_wav = np.fromstring(in_data, dtype=np.int16) / \
         32768.0  # Convert to [-1.0, +1.0]
+    waveform = np_wav.copy()
 
     # Compute RMS and convert to dB
     rms = np.sqrt(np.mean(np_wav**2))
@@ -158,7 +177,9 @@ def audio_samples(in_data, frame_count, time_info, status_flags):
     predictions = []
     if x.shape[0] != 0:
         x = x.reshape(len(x), 96, 64, 1)
+        t0 = time.perf_counter()  # Time the prediction
         pred = model.predict(x, verbose=0)
+        inference_time = (time.perf_counter() - t0) * 1000.0  # Convert to ms
         predictions.append(pred)
 
     for prediction in predictions:
@@ -213,9 +234,18 @@ while (1):
                 output_lines[31] = "%20s: confidence = %.2f, db_level = %.1f" % (
                     "Thresholds", PREDICTION_THRES, DBLEVEL_THRES)
 
+                # Inference Time
+                output_lines[32] = "%20s: %.1fms" % (
+                    "Inference Time", inference_time)
+
                 # Final Prediction
                 pred = "-"
                 event, conf = candidate
                 if (conf > PREDICTION_THRES and db > DBLEVEL_THRES):
                     pred = event
-                output_lines[32] = "%20s: %s" % ("Prediction", pred.upper())
+                output_lines[33] = "%20s: %s" % ("Prediction", pred.upper())
+
+                # Update the Waveform plot
+                line.set_ydata(waveform)
+                fig.canvas.draw()
+                fig.canvas.flush_events()
