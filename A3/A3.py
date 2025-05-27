@@ -52,7 +52,7 @@ if (len(mics) == 0):
 #############
 # Read Command Line Args
 #############
-MICROPHONE_INDEX = 4
+MICROPHONE_INDEX = 11
 # MICROPHONE_INDEX = indices[0]
 # parser = argparse.ArgumentParser()
 # parser.add_argument(
