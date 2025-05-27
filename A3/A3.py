@@ -161,9 +161,9 @@ def audio_samples(in_data, frame_count, time_info, status_flags):
     global waveform
     global inference_time
 
-    # Update waveform data
-    np_wav = np.fromstring(in_data, dtype=np.int16) / \
-        32768.0  # Convert to [-1.0, +1.0]
+    # Update waveform data and Convert to [-1.0, +1.0]
+    # np_wav = np.fromstring(in_data, dtype=np.int16) / 32768.0
+    np_wav = np.frombuffer(in_data, dtype=np.int16) / 32768.0
     waveform = np_wav.copy()
 
     # Compute RMS and convert to dB
@@ -247,5 +247,6 @@ while (1):
 
                 # Update the Waveform plot
                 line.set_ydata(waveform)
-                fig.canvas.draw()
-                fig.canvas.flush_events()
+                plt.pause(0.001)
+                # fig.canvas.draw()
+                # fig.canvas.flush_events()
