@@ -26,7 +26,7 @@ RATE = 16000
 CHUNK = RATE
 MICROPHONES_DESCRIPTION = []
 FPS = 60.0
-OUTPUT_LINES = 34
+OUTPUT_LINES = 36
 
 ###########################
 # Model download
@@ -114,42 +114,90 @@ if (not ubicoustics_model.is_file()):
     print("Downloading example_model.hdf5 [867MB]: ")
     download_model(MODEL_URL, MODEL_PATH)
 
+# Load the ML model from A2/models
+A2_MODEL_PATH = "/home/sharwin/spring_2025/CS496/A2/models/best_small_train_model.h5"
+A2_MODEL = Path(A2_MODEL_PATH)
+if not A2_MODEL.is_file():
+    raise FileNotFoundError(f"Could not find A2 model at {A2_MODEL_PATH}")
+
+
 ##############################
 # Load Deep Learning Model
 ##############################
 print("Using deep learning model: %s" % (model_filename))
 model = load_model(model_filename, compile=False)
 context = ubicoustics.everything
+label = {k: context[k] for k in range(len(context))}
+# label = dict()
+# for k in range(len(context)):
+#     label[k] = context[k]
 
-label = dict()
-for k in range(len(context)):
-    label[k] = context[k]
+# Load A2 Model
+A2_model = load_model(str(A2_MODEL), compile=False)
 
 ##############################
 # Setup Audio Callback
 ##############################
 output_lines = []*OUTPUT_LINES
 audio_rms = 0
-candidate = ("-", 0.0)
+candidate1 = ("-", 0.0)
+candidate2 = ("-", 0.0)
 
 # Prediction Interpolators
-interpolators = []
-for k in range(31):
-    interpolators.append(Interpolator())
+NUM_INTERPOLATORS = 31  # 30 for classes + 1 for dB
+interpolators = [Interpolator() for _ in range(NUM_INTERPOLATORS)]
 
 # Real-time Waveform setup
 plt.ion()
-fig, ax = plt.subplots()
-ax.set_title('Real-time Waveform')
-ax.set_xlabel('Time (s)')
-ax.set_ylabel('Amplitude')
-ax.set_xlim(0, CHUNK)
-ax.set_ylim(-1, 1)
-line, = ax.plot([0]*CHUNK, lw=2)  # initialize line
+plt.ion()
+fig, (ax_wave, ax_bar1, ax_bar2) = plt.subplots(
+    nrows=1, ncols=3, figsize=(12, 4),
+    gridspec_kw={"width_ratios": [1, 1, 1]}
+)
+# — Waveform axis (left) —
+ax_wave.set_title('Real-time Waveform')
+ax_wave.set_xlim(0, CHUNK)
+ax_wave.set_ylim(-1, 1)
+ax_wave.set_xlabel('Sample Index')
+ax_wave.set_ylabel('Amp')
+line_wave, = ax_wave.plot(np.zeros(CHUNK), lw=1)
 
-# global variable for waveform and inference time
+# — Bar chart for “model” (middle) —
+ax_bar1.set_title("Model 1 Probs")
+ax_bar1.set_xlabel("Probability")
+ax_bar1.set_xlim(0, 1.0)
+bar_container1 = ax_bar1.barh(
+    list(range(len(context))), [0.0]*len(context),
+    align='center'
+)
+ax_bar1.set_yticks(range(len(context)))
+ax_bar1.set_yticklabels(
+    [ubicoustics.to_human_labels[label[k]] for k in range(len(context))],
+    fontsize=6
+)
+ax_bar1.invert_yaxis()  # so class 0 is on top
+
+# — Bar chart for “A2_model” (right) —
+ax_bar2.set_title("A2 Model Probs")
+ax_bar2.set_xlabel("Probability")
+ax_bar2.set_xlim(0, 1.0)
+bar_container2 = ax_bar2.barh(
+    list(range(len(context))), [0.0]*len(context),
+    align='center'
+)
+ax_bar2.set_yticks(range(len(context)))
+ax_bar2.set_yticklabels(
+    [ubicoustics.to_human_labels[label[k]] for k in range(len(context))],
+    fontsize=6
+)
+ax_bar2.invert_yaxis()
+
+# Global buffers for latest waveform + probabilities + inference times
 waveform = np.zeros(CHUNK)
-inference_time = 0  # [ms]
+latest_probs1 = np.zeros(len(context))
+latest_probs2 = np.zeros(len(context))
+inference_time1 = 0.0  # ms
+inference_time2 = 0.0  # ms
 
 
 def audio_samples(in_data, frame_count, time_info, status_flags):
@@ -157,9 +205,9 @@ def audio_samples(in_data, frame_count, time_info, status_flags):
     global output_lines
     global interpolators
     global audio_rms
-    global candidate
-    global waveform
-    global inference_time
+    global waveform, latest_probs1, latest_probs2
+    global inference_time1, inference_time2
+    global candidate1, candidate2
 
     # Update waveform data and Convert to [-1.0, +1.0]
     # np_wav = np.fromstring(in_data, dtype=np.int16) / 32768.0
@@ -169,34 +217,51 @@ def audio_samples(in_data, frame_count, time_info, status_flags):
     # Compute RMS and convert to dB
     rms = np.sqrt(np.mean(np_wav**2))
     db = dbFS(rms)
-    interp = interpolators[30]
+    interp = interpolators[NUM_INTERPOLATORS - 1]
     interp.animate(interp.end, db, 1.0)
 
     # Make Predictions
     x = waveform_to_examples(np_wav, RATE)
-    predictions = []
     if x.shape[0] != 0:
         x = x.reshape(len(x), 96, 64, 1)
-        t0 = time.perf_counter()  # Time the prediction
-        pred = model.predict(x, verbose=0)
-        inference_time = (time.perf_counter() - t0) * 1000.0  # Convert to ms
-        predictions.append(pred)
+        # — Model 1 prediction and timing —
+        t0 = time.perf_counter()
+        raw1 = model.predict(x, verbose=0)   # raw1.shape == (1, 30)
+        inference_time1 = (time.perf_counter() - t0) * 1000.0
+        flat1 = raw1[0]                      # now flat1 has shape (30,)
+        latest_probs1 = flat1.copy()
 
-    for prediction in predictions:
-        m = np.argmax(prediction[0])
-        candidate = (ubicoustics.to_human_labels[label[m]], prediction[0, m])
-        num_classes = len(prediction[0])
-        for k in range(num_classes):
-            interp = interpolators[k]
-            prev = interp.end
-            interp.animate(prev, prediction[0, k], 1.0)
+        # Find the winning class for Model 1
+        m1 = np.argmax(flat1)                # integer between 0 and 29
+        candidate1 = (
+            ubicoustics.to_human_labels[label[m1]],
+            float(flat1[m1])
+        )
+
+        # Animate each of the 30 class interpolators with flat1[k]
+        for k in range(NUM_INTERPOLATORS - 1):
+            interpolators[k].animate(interpolators[k].end, flat1[k], 1.0)
+
+        # — Model 2 (A2_model) prediction and timing —
+        t0 = time.perf_counter()
+        raw2 = A2_model.predict(x, verbose=0)  # raw2.shape == (1, 30)
+        inference_time2 = (time.perf_counter() - t0) * 1000.0
+        flat2 = raw2[0]                        # shape (30,)
+        latest_probs2 = flat2.copy()
+
+        # Winning class for A2_model
+        m2 = np.argmax(flat2)
+        candidate2 = (
+            ubicoustics.to_human_labels[label[m2]],
+            float(flat2[m2])
+        )
     return (in_data, pyaudio.paContinue)
 
 
 ##############################
 # Main Execution
 ##############################
-while (1):
+while True:
     ##############################
     # Setup Audio
     ##############################
@@ -214,39 +279,78 @@ while (1):
         with output(initial_len=OUTPUT_LINES, interval=0) as output_lines:
             while True:
                 time.sleep(1.0/FPS)  # 60fps
+                # — Update the 30 class bars for Model 1 in console (using interpolators) —
                 for k in range(30):
-                    interp = interpolators[k]
-                    val = interp.update()
-                    bar = ["|"] * int((val*100.0))
-                    output_lines[k] = "%20s: %.2f %s" % (
-                        ubicoustics.to_human_labels[label[k]], val, "".join(bar))
+                    interp_k = interpolators[k]
+                    val = interp_k.update()
+                    bar = "|" * int(val * 100.0)
+                    output_lines[k] = f"{ubicoustics.to_human_labels[label[k]]:20s}: {val:.2f} {bar}"
 
-                # dB Levels
-                interp = interpolators[30]
-                db = interp.update()
-                val = rangemap(db, -50, 0, 0, 100)
-                val = max(0, min(100, val))  # Clamp val to [0, 100]
-                bar = ["|"] * int(val)
-                output_lines[30] = "%20s: %.1fdB [%s " % (
-                    "Audio Level", db, "".join(bar))
+                # — dB level (index 30) —
+                interp_db = interpolators[NUM_INTERPOLATORS - 1].update()
+                db_val = rangemap(interp_db, -50, 0, 0, 100)
+                db_val = max(0, min(100, db_val))
+                bar_db = "|" * int(db_val)
+                output_lines[30] = f"{'Audio Level':20s}: {interp_db:.1f}dB [{bar_db}]"
 
-                # Display Thresholds
-                output_lines[31] = "%20s: confidence = %.2f, db_level = %.1f" % (
-                    "Thresholds", PREDICTION_THRES, DBLEVEL_THRES)
+                # — Thresholds (index 31) —
+                output_lines[31] = f"{'Thresholds':20s}: conf={PREDICTION_THRES:.2f}, db_th={DBLEVEL_THRES:.1f}"
 
-                # Inference Time
-                output_lines[32] = "%20s: %.1fms" % (
-                    "Inference Time", inference_time)
+                # — Inference times (index 32 & 33) —
+                output_lines[32] = f"{'Model 1 Time':20s}: {inference_time1:6.2f} ms"
+                output_lines[33] = f"{'A2 Model Time':20s}: {inference_time2:6.2f} ms"
 
-                # Final Prediction
-                pred = "-"
-                event, conf = candidate
-                if (conf > PREDICTION_THRES and db > DBLEVEL_THRES):
-                    pred = event
-                output_lines[33] = "%20s: %s" % ("Prediction", pred.upper())
+                # — Final Preds (index 34 & 35) —
+                pred_text1 = "-"
+                if candidate1[1] > PREDICTION_THRES and interp_db > DBLEVEL_THRES:
+                    pred_text1 = candidate1[0].upper()
+                output_lines[34] = f"{'Model 1 Pred':20s}: {pred_text1}"
 
-                # Update the Waveform plot
-                line.set_ydata(waveform)
+                pred_text2 = "-"
+                if candidate2[1] > PREDICTION_THRES and interp_db > DBLEVEL_THRES:
+                    pred_text2 = candidate2[0].upper()
+                output_lines[35] = f"{'A2 Model Pred':20s}: {pred_text2}"
+
+                # — Update waveform plot (left) —
+                line_wave.set_ydata(waveform)
+                ax_wave.draw_artist(line_wave)
+
+                # — Update Model 1 bar chart (middle) —
+                ax_bar1.clear()
+                ax_bar1.set_title("Model 1 Probs")
+                ax_bar1.set_xlim(0, 1.0)
+                ax_bar1.barh(
+                    np.arange(len(latest_probs1)),
+                    latest_probs1,
+                    align='center'
+                )
+                ax_bar1.set_yticks(np.arange(len(latest_probs1)))
+                ax_bar1.set_yticklabels(
+                    [ubicoustics.to_human_labels[label[k]]
+                        for k in range(len(latest_probs1))],
+                    fontsize=6
+                )
+                ax_bar1.invert_yaxis()
+                ax_bar1.grid(False)
+
+                # — Update A2 model bar chart (right) —
+                ax_bar2.clear()
+                ax_bar2.set_title("A2 Model Probs")
+                ax_bar2.set_xlim(0, 1.0)
+                ax_bar2.barh(
+                    np.arange(len(latest_probs2)),
+                    latest_probs2,
+                    align='center'
+                )
+                ax_bar2.set_yticks(np.arange(len(latest_probs2)))
+                ax_bar2.set_yticklabels(
+                    [ubicoustics.to_human_labels[label[k]]
+                        for k in range(len(latest_probs2))],
+                    fontsize=6
+                )
+                ax_bar2.invert_yaxis()
+                ax_bar2.grid(False)
+
+                # — Redraw the entire figure —
+                fig.canvas.draw_idle()
                 plt.pause(0.001)
-                # fig.canvas.draw()
-                # fig.canvas.flush_events()
