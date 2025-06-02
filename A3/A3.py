@@ -53,22 +53,6 @@ if (len(mics) == 0):
 # Read Command Line Args
 #############
 MICROPHONE_INDEX = 11
-# MICROPHONE_INDEX = indices[0]
-# parser = argparse.ArgumentParser()
-# parser.add_argument(
-#     "-m", "--mic", help="Select which microphone / input device to use")
-# args = parser.parse_args()
-# try:
-#     if args.mic:
-#         MICROPHONE_INDEX = int(args.mic)
-#         print("User selected mic: %d" % MICROPHONE_INDEX)
-#     else:
-#         mic_in = input("Select microphone [%d]: " % MICROPHONE_INDEX).strip()
-#         if (mic_in != ''):
-#             MICROPHONE_INDEX = int(mic_in)
-# except:
-#     print("Invalid microphone")
-#     exit()
 
 # Find description that matches the mic index
 mic_desc = ""
@@ -120,7 +104,6 @@ A2_MODEL = Path(A2_MODEL_PATH)
 if not A2_MODEL.is_file():
     raise FileNotFoundError(f"Could not find A2 model at {A2_MODEL_PATH}")
 
-
 ##############################
 # Load Deep Learning Model
 ##############################
@@ -128,9 +111,6 @@ print("Using deep learning model: %s" % (model_filename))
 model = load_model(model_filename, compile=False)
 context = ubicoustics.everything
 label = {k: context[k] for k in range(len(context))}
-# label = dict()
-# for k in range(len(context)):
-#     label[k] = context[k]
 
 # Load A2 Model
 A2_model = load_model(str(A2_MODEL), compile=False)
@@ -210,7 +190,6 @@ def audio_samples(in_data, frame_count, time_info, status_flags):
     global candidate1, candidate2
 
     # Update waveform data and Convert to [-1.0, +1.0]
-    # np_wav = np.fromstring(in_data, dtype=np.int16) / 32768.0
     np_wav = np.frombuffer(in_data, dtype=np.int16) / 32768.0
     waveform = np_wav.copy()
 
